@@ -1,0 +1,5 @@
+huggingface_hub
+google-cloud-storage
+gdown
+requests
+modelscope

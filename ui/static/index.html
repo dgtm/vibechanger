@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video AI Recorder</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 24px; max-width: 720px; }
+      video { width: 100%; background: #111; border-radius: 8px; }
+      .row { display: flex; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
+      button { padding: 10px 14px; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer; }
+      input { padding: 10px; border: 1px solid #ccc; border-radius: 8px; width: 100%; }
+      #status { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; background: #f7f7f7; padding: 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Record and Run Video Job</h1>
+    <video id="preview" autoplay playsinline muted></video>
+    <div class="row">
+      <button id="start">Start Recording</button>
+      <button id="stop" disabled>Stop Recording</button>
+      <button id="uploadRun" disabled>Upload and Run</button>
+    </div>
+    <label>Style</label>
+    <input id="style" value="confident" />
+    <label>Optional source text override</label>
+    <input id="sourceText" placeholder="Leave empty to use transcript" />
+    <div id="status">Idle</div>
+
+    <script>
+      const preview = document.getElementById("preview");
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+      const uploadRunBtn = document.getElementById("uploadRun");
+      const statusEl = document.getElementById("status");
+      const styleEl = document.getElementById("style");
+      const sourceTextEl = document.getElementById("sourceText");
+
+      let mediaRecorder;
+      let chunks = [];
+      let videoBlob = null;
+      let recordMimeType = "";
+
+      function setStatus(msg) {
+        statusEl.textContent = msg;
+      }
+
+      async function mustJson(res, label) {
+        let payload = {};
+        try { payload = await res.json(); } catch (_) {}
+        if (!res.ok) {
+          const detail = payload.detail || JSON.stringify(payload) || `${res.status} ${res.statusText}`;
+          throw new Error(`${label} failed: ${detail}`);
+        }
+        return payload;
+      }
+
+      async function initCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        preview.srcObject = stream;
+      }
+
+      function pickMimeType() {
+        const candidates = [
+          "video/webm;codecs=vp8,opus",
+          "video/webm",
+          "video/mp4;codecs=h264,aac",
+          "video/mp4"
+        ];
+        for (const mime of candidates) {
+          if (window.MediaRecorder && MediaRecorder.isTypeSupported(mime)) return mime;
+        }
+        return "";
+      }
+
+      startBtn.onclick = async () => {
+        const stream = preview.srcObject;
+        if (!stream) {
+          setStatus("No camera stream. Check browser camera/mic permissions.");
+          return;
+        }
+        chunks = [];
+        recordMimeType = pickMimeType();
+        if (!window.MediaRecorder) {
+          setStatus("MediaRecorder is not available in this browser.");
+          return;
+        }
+        if (!recordMimeType) {
+          setStatus("No supported recording format found in this browser.");
+          return;
+        }
+        mediaRecorder = new MediaRecorder(stream, { mimeType: recordMimeType });
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          videoBlob = new Blob(chunks, { type: recordMimeType });
+          uploadRunBtn.disabled = false;
+          setStatus(`Recorded ${(videoBlob.size / (1024 * 1024)).toFixed(2)} MB (${recordMimeType})`);
+        };
+        mediaRecorder.onerror = (e) => setStatus(`Recorder error: ${e.error?.message || e}`);
+        mediaRecorder.start();
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        setStatus(`Recording... (${recordMimeType})`);
+      };
+
+      stopBtn.onclick = () => {
+        mediaRecorder.stop();
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      };
+
+      uploadRunBtn.onclick = async () => {
+        if (!videoBlob) return;
+        try {
+          setStatus("Creating signed URL...");
+          const signRes = await fetch("/api/sign-upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content_type: videoBlob.type || "video/webm" })
+          });
+          const sign = await mustJson(signRes, "sign-upload");
+
+          setStatus("Uploading video to GCS...");
+          const upRes = await fetch(sign.upload_url, {
+            method: "PUT",
+            headers: { "Content-Type": videoBlob.type || sign.content_type },
+            body: videoBlob,
+          });
+          if (!upRes.ok) {
+            throw new Error(`upload failed: ${upRes.status} ${upRes.statusText}`);
+          }
+
+          setStatus("Triggering Cloud Run job...");
+          const runRes = await fetch("/api/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              object_path: sign.object_path,
+              text_style: styleEl.value || "confident",
+              source_text: sourceTextEl.value || "",
+            }),
+          });
+          const run = await mustJson(runRes, "run");
+          setStatus(`Execution: ${run.execution_name}\nPolling status...`);
+
+          const timer = setInterval(async () => {
+            const stRes = await fetch(`/api/status/${run.execution_name}`);
+            const st = await mustJson(stRes, "status");
+            setStatus(`Execution: ${run.execution_name}\nComplete: ${st.complete}\nSuccess: ${st.success}`);
+            if (st.complete) clearInterval(timer);
+          }, 5000);
+        } catch (err) {
+          setStatus(`Error: ${err}`);
+        }
+      };
+
+      initCamera().catch((err) => setStatus(`Camera error: ${err}`));
+    </script>
+  </body>
+  </html>

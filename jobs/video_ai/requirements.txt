@@ -1,0 +1,6 @@
+pyyaml
+faster-whisper
+transformers
+sentencepiece
+hyperpyyaml
+modelscope

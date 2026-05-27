@@ -1,0 +1,79 @@
+# OS / editor
+.DS_Store
+**/.DS_Store
+.idea/
+*.swp
+*.swo
+
+# VS Code (keep workspace settings optional; ignore local state)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Virtual environments
+.venv/
+.venv-cosy/
+.venv-ui/
+.local-venv/
+venv/
+
+# Build / runtime artifacts
+*.log
+tmp/
+.tmp/
+
+# Local data and generated outputs
+local/input/*
+!local/input/.gitkeep
+local/output/*
+!local/output/.gitkeep
+local/tmp/
+local/*.wav
+local/*.mp3
+local/*.flac
+local/*.m4a
+local/*.aac
+local/*.ogg
+local/*.mp4
+local/*.mov
+local/**/*.wav
+local/**/*.mp3
+local/**/*.flac
+local/**/*.m4a
+local/**/*.aac
+local/**/*.ogg
+local/**/*.mp4
+local/**/*.mov
+
+# Large model assets
+models/
+
+# Hugging Face / ModelScope caches
+.cache/
+hf_cache/
+modelscope_cache/
+
+# Terraform local state and caches
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfplan
+*.auto.tfvars
+
+# External dependency clones
+CosyVoice/
