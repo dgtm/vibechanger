@@ -30,6 +30,8 @@
     <input id="sourceText" placeholder="Leave empty to use transcript" />
     <h3>Generated Video</h3>
     <video id="resultVideo" controls playsinline></video>
+    <h3>Recent Outputs</h3>
+    <div id="recentOutputs">Loading...</div>
     <div id="status">Idle</div>
 
     <script>
@@ -44,6 +46,7 @@
       const styleEl = document.getElementById("style");
       const sourceTextEl = document.getElementById("sourceText");
       const resultVideoEl = document.getElementById("resultVideo");
+      const recentOutputsEl = document.getElementById("recentOutputs");
 
       let mediaRecorder;
       let chunks = [];
@@ -63,6 +66,42 @@
           throw new Error(`${label} failed: ${detail}`);
         }
         return payload;
+      }
+
+      function renderRecentOutputs(items) {
+        if (!items || items.length === 0) {
+          recentOutputsEl.textContent = "No outputs yet.";
+          return;
+        }
+        recentOutputsEl.innerHTML = items
+          .map((item) => {
+            const outName = item.object_path.split("/").pop();
+            const inName = item.input_object_path ? item.input_object_path.split("/").pop() : "unknown";
+            const updated = item.updated ? new Date(item.updated).toLocaleString() : "";
+            return `<div style="margin:8px 0;">
+              ${item.input_video_url ? `<button data-url="${item.input_video_url.replace(/"/g, "&quot;")}">Play Input</button>` : `<button disabled>Play Input</button>`}
+              <button data-url="${item.video_url.replace(/"/g, "&quot;")}">Play Output</button>
+              <span style="margin-left:8px;">${inName} -> ${outName}</span>
+              <span style="margin-left:8px;color:#666;">${updated}</span>
+            </div>`;
+          })
+          .join("");
+        recentOutputsEl.querySelectorAll("button[data-url]").forEach((btn) => {
+          btn.onclick = () => {
+            resultVideoEl.src = btn.getAttribute("data-url");
+            resultVideoEl.load();
+          };
+        });
+      }
+
+      async function loadRecentOutputs() {
+        try {
+          const res = await fetch("/api/output-videos?limit=5");
+          const data = await mustJson(res, "output-videos");
+          renderRecentOutputs(data.items || []);
+        } catch (err) {
+          recentOutputsEl.textContent = `Failed to load outputs: ${err}`;
+        }
       }
 
       async function initCamera() {
@@ -136,6 +175,7 @@
                 const out = await mustJson(outRes, "output-video");
                 resultVideoEl.src = out.video_url;
                 resultVideoEl.load();
+                await loadRecentOutputs();
                 setStatus(`${label}\nExecution: ${executionName}\nSuccess: true\nOutput: ${out.object_path}`);
               } catch (err) {
                 setStatus(`${label}\nExecution: ${executionName}\nSuccess: true\nOutput fetch error: ${err}`);
@@ -244,6 +284,7 @@
         }
       };
 
+      loadRecentOutputs();
       initCamera().catch((err) => setStatus(`Camera error: ${err}`));
     </script>
   </body>

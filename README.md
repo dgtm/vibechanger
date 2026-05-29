@@ -1,8 +1,13 @@
 # Vibechanger
 
+![Vibechanger demo](demo.png)
+
 Vibechanger is my shot at a video voice-style transformation pipeline.
 
 It takes an input video, transcribes its audio, rewrites the transcript to a target tone, synthesizes new speech with CosyVoice3 using the speaker's own reference sample, and runs MuseTalk to produce a lip-synced output video.
+
+An example of the lip synced frame for a blurry input
+![Vibechanger facecut](facecut.png)
 
 ## How do you do that
 
@@ -72,5 +77,5 @@ make hf-download
 - Cloud job data paths are mounted under `/data` in the container.
 - Model assets are mounted/read from `/models` in the container.
 
-## Challenges
-I use Google Cloud Run jobs, its ephemeral and just easier to terraform. Models are backed by the cloud storage which can be loaded to the containers on runtime. Bootup time and Image size is still a bit harsh, separating the steps would need a messaging layer between them.
+## Design
+I use Google Cloud Run jobs, its ephemeral and just easier to terraform. Models are backed by the cloud storage which can be loaded to the containers on runtime. Bootup time and Image size is still a bit harsh. Message passing is dont through UI.

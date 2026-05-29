@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import secrets
 import subprocess
 from datetime import timedelta
@@ -64,6 +65,18 @@ class RunResponse(BaseModel):
 class OutputVideoResponse(BaseModel):
     video_url: str
     object_path: str
+
+
+class OutputVideoItem(BaseModel):
+    video_url: str
+    object_path: str
+    updated: str
+    input_video_url: str | None = None
+    input_object_path: str | None = None
+
+
+class OutputVideosResponse(BaseModel):
+    items: list[OutputVideoItem]
 
 
 def execute_job(job_name: str, req: RunRequest, extra_env: dict[str, str] | None = None) -> RunResponse:
@@ -137,6 +150,57 @@ def find_output_blob(object_path: str) -> storage.Blob:
     raise HTTPException(status_code=404, detail="No output MP4 found in outputs/")
 
 
+def list_output_blobs(limit: int) -> list[storage.Blob]:
+    prefixes = ["outputs/musetalk/v15/", "outputs/musetalk/", "outputs/"]
+    seen: set[str] = set()
+    all_mp4: list[storage.Blob] = []
+    for prefix in prefixes:
+        for blob in storage_client.list_blobs(DATA_BUCKET, prefix=prefix):
+            if not blob.name.lower().endswith(".mp4"):
+                continue
+            if blob.name in seen:
+                continue
+            seen.add(blob.name)
+            all_mp4.append(blob)
+    all_mp4.sort(key=lambda b: b.updated or b.time_created, reverse=True)
+    return all_mp4[:limit]
+
+
+def guess_input_blob_for_output(output_blob: storage.Blob) -> storage.Blob | None:
+    # Common output pattern: outputs/musetalk/v15/<input_stem>_generated/...mp4
+    name = output_blob.name
+    marker = "_generated/"
+    bucket = storage_client.bucket(DATA_BUCKET)
+
+    stem: str | None = None
+    if marker in name:
+        stem = name.split(marker, 1)[0].split("/")[-1]
+    if not stem:
+        # Fallback: detect hex-like run IDs in output names.
+        match = re.search(r"([a-f0-9]{8,32})", name)
+        if match:
+            stem = match.group(1)
+    if not stem:
+        return None
+
+    # First try exact expected filenames.
+    for ext in (".mp4", ".webm", ".mov", ".mkv"):
+        candidate = bucket.blob(f"{INPUT_PREFIX}/{stem}{ext}")
+        if candidate.exists():
+            return candidate
+
+    # Fallback: any input object that starts with the same stem.
+    prefix = f"{INPUT_PREFIX}/{stem}"
+    candidates = sorted(
+        (blob for blob in storage_client.list_blobs(DATA_BUCKET, prefix=prefix) if not blob.name.endswith("/")),
+        key=lambda b: b.updated or b.time_created,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    return None
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "index.html"))
@@ -192,6 +256,37 @@ def output_video(object_path: str) -> OutputVideoResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to sign output URL: {exc}") from exc
     return OutputVideoResponse(video_url=signed_url, object_path=blob.name)
+
+
+@app.get("/api/output-videos", response_model=OutputVideosResponse)
+def output_videos(limit: int = 5) -> OutputVideosResponse:
+    limit = max(1, min(limit, 20))
+    items: list[OutputVideoItem] = []
+    for blob in list_output_blobs(limit):
+        try:
+            signed_url = blob.generate_signed_url(version="v4", expiration=timedelta(minutes=15), method="GET")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to sign output URL: {exc}") from exc
+        updated = (blob.updated or blob.time_created).isoformat() if (blob.updated or blob.time_created) else ""
+        input_blob = guess_input_blob_for_output(blob)
+        input_video_url = None
+        input_object_path = None
+        if input_blob is not None:
+            try:
+                input_video_url = input_blob.generate_signed_url(version="v4", expiration=timedelta(minutes=15), method="GET")
+                input_object_path = input_blob.name
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to sign input URL: {exc}") from exc
+        items.append(
+            OutputVideoItem(
+                video_url=signed_url,
+                object_path=blob.name,
+                updated=updated,
+                input_video_url=input_video_url,
+                input_object_path=input_object_path,
+            )
+        )
+    return OutputVideosResponse(items=items)
 
 
 @app.get("/api/status/{execution_name}")
