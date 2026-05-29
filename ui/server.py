@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 PROJECT_ID = os.environ.get("PROJECT_ID", "toner-ai")
 REGION = os.environ.get("REGION", "europe-west1")
-VIDEO_AI_JOB = os.environ.get("VIDEO_AI_JOB", "video-ai-job")
+VIDEO_POST_JOB = os.environ.get("VIDEO_POST_JOB", "video-post-job")
+COSYVOICE_JOB = os.environ.get("COSYVOICE_JOB", "cosyvoice3-job")
 DATA_BUCKET = os.environ.get("DATA_BUCKET", "toner-ai-video-ai-data")
 INPUT_PREFIX = os.environ.get("INPUT_PREFIX", "inputs")
 
@@ -60,6 +61,82 @@ class RunResponse(BaseModel):
     execution_name: str
 
 
+class OutputVideoResponse(BaseModel):
+    video_url: str
+    object_path: str
+
+
+def execute_job(job_name: str, req: RunRequest, extra_env: dict[str, str] | None = None) -> RunResponse:
+    base_name = Path(req.object_path).name
+    video_path = f"/data/{INPUT_PREFIX}/{base_name}"
+    env = {
+        "VIDEO_PATH": video_path,
+        "TEXT_STYLE": req.text_style,
+        "SOURCE_TEXT": req.source_text,
+    }
+    if extra_env:
+        env.update(extra_env)
+    env_payload = ",".join(f"{k}={v}" for k, v in env.items())
+    cmd = [
+        "gcloud",
+        "run",
+        "jobs",
+        "execute",
+        job_name,
+        f"--region={REGION}",
+        f"--update-env-vars={env_payload}",
+        "--format=json",
+    ]
+    print(f"Executing Cloud Run job: {job_name}")
+    try:
+        proc = subprocess.run(cmd, check=True, text=True, capture_output=True)
+        payload = json.loads(proc.stdout)
+        execution_name = payload.get("metadata", {}).get("name", "")
+        if not execution_name:
+            raise ValueError("Missing execution name from gcloud response")
+        return RunResponse(execution_name=execution_name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to run job {job_name}: {exc}") from exc
+
+
+def find_output_blob(object_path: str) -> storage.Blob:
+    input_name = Path(object_path).name
+    input_stem = Path(input_name).stem
+    output_prefix = "outputs/"
+    preferred_prefixes = [f"{output_prefix}musetalk/v15/", f"{output_prefix}musetalk/", output_prefix]
+    generated_dir_token = f"{input_stem}_generated/"
+
+    for prefix in preferred_prefixes:
+        candidates = sorted(
+            (
+                blob
+                for blob in storage_client.list_blobs(DATA_BUCKET, prefix=prefix)
+                if blob.name.lower().endswith(".mp4")
+                and (
+                    generated_dir_token in blob.name
+                    or input_stem in Path(blob.name).stem
+                )
+            ),
+            key=lambda b: b.updated or b.time_created,
+            reverse=True,
+        )
+        if candidates:
+            return candidates[0]
+
+    fallback = sorted(
+        (
+            blob
+            for blob in storage_client.list_blobs(DATA_BUCKET, prefix=output_prefix)
+            if blob.name.lower().endswith(".mp4")
+        ),
+        key=lambda b: b.updated or b.time_created,
+        reverse=True,
+    )
+    if fallback:
+        return fallback[0]
+    raise HTTPException(status_code=404, detail="No output MP4 found in outputs/")
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "index.html"))
@@ -89,28 +166,32 @@ def sign_upload(req: SignUploadRequest) -> SignUploadResponse:
 
 @app.post("/api/run", response_model=RunResponse)
 def run_job(req: RunRequest) -> RunResponse:
-    base_name = Path(req.object_path).name
-    video_path = f"/data/{INPUT_PREFIX}/{base_name}"
-    env_payload = f"VIDEO_PATH={video_path},TEXT_STYLE={req.text_style},SOURCE_TEXT={req.source_text}"
-    cmd = [
-        "gcloud",
-        "run",
-        "jobs",
-        "execute",
-        VIDEO_AI_JOB,
-        f"--region={REGION}",
-        f"--update-env-vars={env_payload}",
-        "--format=json",
-    ]
+    return execute_job(VIDEO_POST_JOB, req, {"PIPELINE_STAGE": "musetalk"})
+
+
+@app.post("/api/run-step1", response_model=RunResponse)
+def run_step1(req: RunRequest) -> RunResponse:
+    return execute_job(VIDEO_POST_JOB, req, {"PIPELINE_STAGE": "transform"})
+
+
+@app.post("/api/run-step2", response_model=RunResponse)
+def run_step2(req: RunRequest) -> RunResponse:
+    return execute_job(COSYVOICE_JOB, req)
+
+
+@app.post("/api/run-step3", response_model=RunResponse)
+def run_step3(req: RunRequest) -> RunResponse:
+    return execute_job(VIDEO_POST_JOB, req, {"PIPELINE_STAGE": "musetalk"})
+
+
+@app.get("/api/output-video", response_model=OutputVideoResponse)
+def output_video(object_path: str) -> OutputVideoResponse:
+    blob = find_output_blob(object_path)
     try:
-        proc = subprocess.run(cmd, check=True, text=True, capture_output=True)
-        payload = json.loads(proc.stdout)
-        execution_name = payload.get("metadata", {}).get("name", "")
-        if not execution_name:
-            raise ValueError("Missing execution name from gcloud response")
-        return RunResponse(execution_name=execution_name)
+        signed_url = blob.generate_signed_url(version="v4", expiration=timedelta(minutes=15), method="GET")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to run job: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Failed to sign output URL: {exc}") from exc
+    return OutputVideoResponse(video_url=signed_url, object_path=blob.name)
 
 
 @app.get("/api/status/{execution_name}")

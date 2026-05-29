@@ -49,6 +49,16 @@ variable "hf_downloader_container_image" {
   type        = string
 }
 
+variable "cosyvoice_container_image" {
+  description = "Container image for the CosyVoice Cloud Run job"
+  type        = string
+}
+
+variable "video_post_container_image" {
+  description = "Container image for the Video Post Cloud Run job"
+  type        = string
+}
+
 variable "service_account_id" {
   description = "Short account ID for the Cloud Run service account"
   type        = string
@@ -65,6 +75,18 @@ variable "hf_downloader_job_name" {
   description = "Cloud Run Job name for downloading Hugging Face models"
   type        = string
   default     = "hf-downloader-job"
+}
+
+variable "cosyvoice_job_name" {
+  description = "Cloud Run Job name for CosyVoice stage"
+  type        = string
+  default     = "cosyvoice3-job"
+}
+
+variable "video_post_job_name" {
+  description = "Cloud Run Job name for video-post stage"
+  type        = string
+  default     = "video-post-job"
 }
 
 variable "hf_downloader_model_id" {

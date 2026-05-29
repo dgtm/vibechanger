@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import torchaudio
+import soundfile as sf
 
 
 HERE = Path(__file__).resolve()
@@ -71,8 +71,10 @@ def main() -> None:
         if audio.dim() == 1:
             audio = audio.unsqueeze(0)
 
-        audio = audio.cpu()
-        torchaudio.save(str(output_path), audio.cpu(), 24000)
+        audio = audio.detach().cpu().numpy()
+        if audio.ndim == 2:
+            audio = audio.T
+        sf.write(str(output_path), audio, 24000)
         break
 
     print(f"Wrote CosyVoice audio: {output_path}")

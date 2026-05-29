@@ -9,6 +9,7 @@ REGION ?= europe-west1
 ARTIFACT_REPOSITORY ?= ai
 IMAGE_TAG ?= latest
 DOCKER_PLATFORM ?= linux/amd64
+BUILDX_BUILDER ?= desktop-linux
 
 # Infra + cloud resources
 TERRAFORM_DIR ?= terraform
@@ -22,8 +23,9 @@ DATA_BUCKET ?= toner-ai-video-ai-data
 INPUT_PREFIX ?= inputs
 
 # Images
-VIDEO_AI_IMAGE ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(ARTIFACT_REPOSITORY)/video-worker:$(IMAGE_TAG)
 HF_DOWNLOADER_IMAGE ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(ARTIFACT_REPOSITORY)/hf-downloader:$(IMAGE_TAG)
+COSYVOICE_IMAGE ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(ARTIFACT_REPOSITORY)/cosyvoice-worker:$(IMAGE_TAG)
+VIDEO_POST_IMAGE ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(ARTIFACT_REPOSITORY)/video-post-worker:$(IMAGE_TAG)
 
 # Runtime knobs
 LOG_POLL_SECONDS ?= 10
@@ -57,7 +59,7 @@ export DUMMY_TEXT DUMMY_TTS_LANGUAGE DUMMY_TTS_MODEL DUMMY_TTS_PROMPT_TEXT DUMMY
 .PHONY: help \
   auth-login auth-adc auth-project auth-status \
   artifact-registry-create docker-auth docker-build docker-push docker-publish \
-  docker-build-video-ai docker-build-hf-downloader docker-push-video-ai docker-push-hf-downloader docker-publish-video-ai docker-publish-hf-downloader \
+  docker-build-hf-downloader docker-build-cosyvoice docker-build-video-post docker-push-hf-downloader docker-push-cosyvoice docker-push-video-post docker-publish-hf-downloader docker-publish-cosyvoice docker-publish-video-post \
   upload-input run \
   hf-download hf-download-repo hf-download-url \
   local-venv local-download-model local-transcribe local-run local-dummy-audio \
@@ -89,27 +91,49 @@ artifact-registry-create: auth-project ## create Artifact Registry docker repo
 docker-auth: ## configure docker auth for Artifact Registry
 	gcloud auth configure-docker $(REGION)-docker.pkg.dev
 
-docker-build-video-ai: ## build video worker image
-	docker build --platform=$(DOCKER_PLATFORM) --cache-from $(VIDEO_AI_IMAGE) -t $(VIDEO_AI_IMAGE) jobs/video_ai
-
 docker-build-hf-downloader: ## build hf downloader image
 	docker build --platform=$(DOCKER_PLATFORM) -t $(HF_DOWNLOADER_IMAGE) jobs/hf_downloader
 
-docker-build: docker-build-video-ai docker-build-hf-downloader ## build both images
+docker-build-cosyvoice: ## build cosyvoice job image (multi-stage target)
+	docker buildx build \
+		--builder=$(BUILDX_BUILDER) \
+		--platform=$(DOCKER_PLATFORM) \
+		--target cosyvoice \
+		--tag $(COSYVOICE_IMAGE) \
+		--load \
+		-f jobs/video_pipeline/Dockerfile \
+		.
 
-docker-push-video-ai: ## push video worker image
-	docker push $(VIDEO_AI_IMAGE)
+docker-build-video-post: ## build video-post job image (multi-stage target)
+	docker buildx build \
+		--builder=$(BUILDX_BUILDER) \
+		--platform=$(DOCKER_PLATFORM) \
+		--target video-post \
+		--tag $(VIDEO_POST_IMAGE) \
+		--load \
+		-f jobs/video_pipeline/Dockerfile \
+		.
+
+docker-build: docker-build-hf-downloader docker-build-cosyvoice docker-build-video-post ## build all images
 
 docker-push-hf-downloader: ## push hf downloader image
 	docker push $(HF_DOWNLOADER_IMAGE)
 
-docker-push: docker-push-video-ai docker-push-hf-downloader ## push both images
+docker-push-cosyvoice: ## push cosyvoice image
+	docker push $(COSYVOICE_IMAGE)
 
-docker-publish-video-ai: auth-project docker-auth docker-build-video-ai docker-push-video-ai ## build+push video worker
+docker-push-video-post: ## push video-post image
+	docker push $(VIDEO_POST_IMAGE)
+
+docker-push: docker-push-hf-downloader docker-push-cosyvoice docker-push-video-post ## push all images
 
 docker-publish-hf-downloader: auth-project docker-auth docker-build-hf-downloader docker-push-hf-downloader ## build+push hf downloader
 
-docker-publish: docker-publish-video-ai docker-publish-hf-downloader ## build+push both images
+docker-publish-cosyvoice: auth-project docker-auth docker-build-cosyvoice docker-push-cosyvoice ## build+push cosyvoice
+
+docker-publish-video-post: auth-project docker-auth docker-build-video-post docker-push-video-post ## build+push video-post
+
+docker-publish: docker-publish-hf-downloader docker-publish-cosyvoice docker-publish-video-post ## build+push all images
 
 # ---------- Run jobs ----------
 upload-input: auth-project ## upload local/input/input.mp4 to data bucket
@@ -141,9 +165,9 @@ local-transcribe: ## transcribe LOCAL_AUDIO with local whisper model
 	test -n "$(LOCAL_AUDIO)"
 	.local-venv/bin/python local/transcribe.py "$(LOCAL_AUDIO)" --model "$(LOCAL_MODEL_DIR)"
 
-local-run: ## run video worker locally with docker + gpu
+local-run: ## run video-post worker locally with docker + gpu
 	mkdir -p $(LOCAL_OUTPUT_DIR)
-	docker run --rm --gpus all --platform=$(DOCKER_PLATFORM) -e DATA_DIR=/data -e INPUT_DIR=/data/inputs -e OUTPUT_DIR=/data/outputs -e VIDEO_PATH=/data/inputs/input.mp4 -v "$(PWD)/models:/models:ro" -v "$(PWD)/local/input:/data/inputs:ro" -v "$(PWD)/$(LOCAL_OUTPUT_DIR):/data/outputs" $(VIDEO_AI_IMAGE)
+	docker run --rm --gpus all --platform=$(DOCKER_PLATFORM) -e DATA_DIR=/data -e INPUT_DIR=/data/inputs -e OUTPUT_DIR=/data/outputs -e VIDEO_PATH=/data/inputs/input.mp4 -v "$(PWD)/models:/models:ro" -v "$(PWD)/local/input:/data/inputs:ro" -v "$(PWD)/$(LOCAL_OUTPUT_DIR):/data/outputs" $(VIDEO_POST_IMAGE)
 
 local-dummy-audio: ## generate dummy local audio sample
 	mkdir -p local/input

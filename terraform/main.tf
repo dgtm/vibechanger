@@ -306,6 +306,188 @@ resource "google_cloud_run_v2_job" "video_ai" {
   ]
 }
 
+resource "google_cloud_run_v2_job" "cosyvoice" {
+  project             = google_project.project.project_id
+  name                = var.cosyvoice_job_name
+  location            = var.region
+  deletion_protection = false
+
+  template {
+    task_count  = var.task_count
+    parallelism = var.parallelism
+
+    template {
+      service_account               = google_service_account.job.email
+      timeout                       = "${var.task_timeout_seconds}s"
+      max_retries                   = 0
+      gpu_zonal_redundancy_disabled = true
+
+      node_selector {
+        accelerator = var.gpu_type
+      }
+
+      volumes {
+        name = "models"
+        gcs {
+          bucket    = google_storage_bucket.models.name
+          read_only = true
+        }
+      }
+
+      volumes {
+        name = "data"
+        gcs {
+          bucket = google_storage_bucket.data.name
+        }
+      }
+
+      containers {
+        image = var.cosyvoice_container_image
+
+        resources {
+          limits = {
+            cpu              = var.cpu
+            memory           = var.memory
+            "nvidia.com/gpu" = "1"
+          }
+        }
+
+        env {
+          name  = "MODELS_DIR"
+          value = "/models"
+        }
+
+        env {
+          name  = "DATA_DIR"
+          value = "/data"
+        }
+
+        env {
+          name  = "TMP_DIR"
+          value = "/tmp"
+        }
+
+        env {
+          name  = "INPUT_PREFIX"
+          value = var.input_prefix
+        }
+
+        env {
+          name  = "OUTPUT_PREFIX"
+          value = var.output_prefix
+        }
+
+        volume_mounts {
+          name       = "models"
+          mount_path = "/models"
+        }
+
+        volume_mounts {
+          name       = "data"
+          mount_path = "/data"
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_service.services,
+    google_storage_bucket_iam_member.job_models_viewer,
+    google_storage_bucket_iam_member.job_data_admin,
+  ]
+}
+
+resource "google_cloud_run_v2_job" "video_post" {
+  project             = google_project.project.project_id
+  name                = var.video_post_job_name
+  location            = var.region
+  deletion_protection = false
+
+  template {
+    task_count  = var.task_count
+    parallelism = var.parallelism
+
+    template {
+      service_account               = google_service_account.job.email
+      timeout                       = "${var.task_timeout_seconds}s"
+      max_retries                   = 0
+      gpu_zonal_redundancy_disabled = true
+
+      node_selector {
+        accelerator = var.gpu_type
+      }
+
+      volumes {
+        name = "models"
+        gcs {
+          bucket    = google_storage_bucket.models.name
+          read_only = true
+        }
+      }
+
+      volumes {
+        name = "data"
+        gcs {
+          bucket = google_storage_bucket.data.name
+        }
+      }
+
+      containers {
+        image = var.video_post_container_image
+
+        resources {
+          limits = {
+            cpu              = var.cpu
+            memory           = var.memory
+            "nvidia.com/gpu" = "1"
+          }
+        }
+
+        env {
+          name  = "MODELS_DIR"
+          value = "/models"
+        }
+
+        env {
+          name  = "DATA_DIR"
+          value = "/data"
+        }
+
+        env {
+          name  = "TMP_DIR"
+          value = "/tmp"
+        }
+
+        env {
+          name  = "INPUT_PREFIX"
+          value = var.input_prefix
+        }
+
+        env {
+          name  = "OUTPUT_PREFIX"
+          value = var.output_prefix
+        }
+
+        volume_mounts {
+          name       = "models"
+          mount_path = "/models"
+        }
+
+        volume_mounts {
+          name       = "data"
+          mount_path = "/data"
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_service.services,
+    google_storage_bucket_iam_member.job_models_viewer,
+    google_storage_bucket_iam_member.job_data_admin,
+  ]
+}
+
 output "cloud_run_job_name" {
   value = google_cloud_run_v2_job.video_ai.name
 }
@@ -316,6 +498,14 @@ output "project_id" {
 
 output "hf_downloader_cloud_run_job_name" {
   value = google_cloud_run_v2_job.hf_downloader.name
+}
+
+output "cosyvoice_cloud_run_job_name" {
+  value = google_cloud_run_v2_job.cosyvoice.name
+}
+
+output "video_post_cloud_run_job_name" {
+  value = google_cloud_run_v2_job.video_post.name
 }
 
 output "cloud_run_job_location" {

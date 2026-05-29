@@ -10,7 +10,7 @@ Whisper, CosyVoice3, MuseTalk
 
 ## Repo Structure
 
-- `jobs/video_ai/`: main worker image and runtime pipeline.
+- `jobs/video_pipeline/`: active multi-stage pipeline workers (`cosyvoice`, `video-post`).
 - `jobs/hf_downloader/`: model downloader job for Hugging Face / direct URLs.
 - `scripts/run_video_model.sh`: Cloud Run Job execution + log tailing wrapper.
 - `terraform/`: infra for jobs, buckets, IAM, and related resources.
@@ -37,7 +37,6 @@ Build and publish images:
 ```bash
 make docker-publish
 ```
-
 
 Terraform workflow:
 
